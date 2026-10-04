@@ -60,6 +60,36 @@ class TestSituAndMul(CustomTestCase):
             atol=4e-2,
         )
 
+    def test_a_row_stride_off_the_vector_grid(self):
+        # A slice of a fused GEMM output with a few more columns: its row
+        # stride is not a whole number of the kernel's 32-byte vectors of the
+        # wider dtype, so the kernel reads a dense copy of it.
+        generator = torch.Generator(device="cuda").manual_seed(3)
+        hidden_size = 1024
+        for dtype, extra in ((torch.bfloat16, 3), (torch.float32, 2)):
+            with self.subTest(dtype=dtype):
+                storage = torch.randn(
+                    (7, 2 * hidden_size + extra),
+                    generator=generator,
+                    device="cuda",
+                    dtype=dtype,
+                )
+                gate_up = storage[:, : 2 * hidden_size]
+                widest = max(gate_up.element_size(), 2)
+                self.assertNotEqual(gate_up.stride(0) * widest % 32, 0)
+
+                returned = situ_and_mul(
+                    gate_up, None, beta=_BETA, linear_beta=_LINEAR_BETA
+                )
+
+                self.assertEqual(returned.dtype, torch.bfloat16)
+                torch.testing.assert_close(
+                    returned.float(),
+                    _situ_reference(gate_up).to(torch.bfloat16).float(),
+                    rtol=2e-2,
+                    atol=4e-2,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
